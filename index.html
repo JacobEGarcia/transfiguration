@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#070708">
+<title>TRANSFIGURATION</title>
+<meta name="description" content="The old world is dying. An ASCII skull engine, after @_1mposter.">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="%23070708"/><text x="32" y="44" font-family="monospace" font-size="40" fill="%23ff2f92" text-anchor="middle">@</text></svg>'>
+<link rel="stylesheet" href="fonts-local.css">
+<style>
+  :root{
+    --pink:#ff2f92;
+    --pink-dim:rgba(255,47,146,.55);
+    --pink-hair:rgba(255,47,146,.28);
+    --bg:#070708;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;border-radius:0}
+  html,body{height:100%;background:var(--bg);overflow:hidden}
+  body{
+    font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    color:var(--pink);
+    -webkit-font-smoothing:antialiased;
+    user-select:none;-webkit-user-select:none;
+    cursor:crosshair;
+  }
+  #screen{position:fixed;inset:0;width:100%;height:100%;display:block}
+  .hud{position:fixed;z-index:5;pointer-events:none;font-size:11px;letter-spacing:.18em;font-weight:500}
+  #glyph-tl{top:14px;left:16px;font-size:15px;letter-spacing:.05em}
+  #clock{top:14px;right:16px;font-weight:600}
+  #title-bl{left:16px;bottom:14px;line-height:1.7}
+  #title-bl .t{font-weight:600;font-size:12px}
+  #title-bl .s{color:var(--pink-dim);font-size:10px}
+  #ctl-br{right:16px;bottom:14px;text-align:right;line-height:1.7;font-size:10px;color:var(--pink-dim)}
+  #sound{pointer-events:auto;color:var(--pink-dim);background:none;border:1px solid var(--pink-hair);
+    font:inherit;letter-spacing:.18em;padding:4px 10px;margin-top:6px;cursor:pointer;text-transform:uppercase}
+  #sound:hover{color:var(--pink);border-color:var(--pink-dim)}
+  #phrase{
+    position:fixed;left:0;right:0;top:71%;z-index:5;text-align:center;pointer-events:none;
+    font-size:clamp(13px,1.7vw,19px);font-weight:600;letter-spacing:.42em;text-indent:.42em;
+    text-shadow:0 0 18px rgba(255,47,146,.45);
+    min-height:1.4em;padding:0 20px;
+  }
+  #phrase .cur{animation:blink .9s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  #logbox{
+    position:fixed;left:50%;transform:translateX(-50%);bottom:52px;z-index:4;pointer-events:none;
+    width:min(86vw,720px);border:1px solid var(--pink-hair);
+    padding:10px 14px;font-size:9.5px;line-height:1.65;letter-spacing:.04em;
+    color:rgba(255,47,146,.62);background:rgba(7,7,8,.35);
+    font-weight:400;overflow:hidden;height:calc(9 * 1.65 * 9.5px + 20px);
+  }
+  #logbox div{white-space:nowrap}
+  #vignette{position:fixed;inset:0;z-index:6;pointer-events:none;
+    background:radial-gradient(ellipse at 50% 42%,transparent 55%,rgba(0,0,0,.55) 100%)}
+  @media (max-width:640px){
+    #logbox{width:92vw;bottom:46px;font-size:8.5px}
+    #phrase{top:66%;letter-spacing:.3em;text-indent:.3em}
+    #title-bl{bottom:12px}#ctl-br{bottom:12px}
+  }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<div class="hud" id="glyph-tl">C \_</div>
+<div class="hud" id="clock">00 00 00</div>
+<div class="hud" id="title-bl"><div class="t">TRANSFIGURATION</div><div class="s">AFTER @_1MPOSTER</div></div>
+<div class="hud" id="ctl-br">DRAG&nbsp;&mdash;&nbsp;ROTATE<br>CLICK&nbsp;&mdash;&nbsp;TRANSFIGURE<br><button id="sound" type="button">SOUND&nbsp;OFF</button></div>
+<div id="phrase"><span id="phrase-txt"></span><span class="cur">_</span></div>
+<div id="logbox"></div>
+<div id="vignette"></div>
+<script>
+"use strict";
+/* ============================================================
+   TRANSFIGURATION - ASCII skull engine
+   CPU-raymarched skull SDF -> ASCII luminance grid -> chrome
+   ============================================================ */
+const PINK = [255,47,146];
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const mix=(a,b,t)=>a+(b-a)*t;
+const fract=v=>v-Math.floor(v);
+
+/* ---------- canvas setup ---------- */
+const cv=document.getElementById("screen");
+const cx=cv.getContext("2d");
+const glyph=document.createElement("canvas");   // ASCII layer
+const gx=glyph.getContext("2d");
+const tint=document.createElement("canvas");    // chroma pass
+const tx=tint.getContext("2d");
+
+let W=0,H=0,DPR=1;
+let region={x:0,y:0,w:0,h:0};
+let cols=0,rows=0,cw=0,chh=0;
+
+const CW=7.5,CH=12;        // target cell px
+const MAXC=96,MAXR=56;
+
+function resize(){
+  DPR=Math.min(window.devicePixelRatio||1,1.25);
+  W=window.innerWidth;H=window.innerHeight;
+  cv.width=W*DPR;cv.height=H*DPR;cv.style.width=W+"px";cv.style.height=H+"px";
+  cx.setTransform(DPR,0,0,DPR,0,0);
+
+  const rh=H*0.60, rw=Math.min(W*0.90,rh*0.9);
+  region={x:(W-rw)/2,y:H*0.045,w:rw,h:rh};
+  cols=Math.min(MAXC,Math.floor(rw/CW));
+  rows=Math.min(MAXR,Math.floor(rh/CH));
+  cw=region.w/cols; chh=region.h/rows;
+
+  glyph.width=Math.ceil(region.w*DPR);glyph.height=Math.ceil(region.h*DPR);
+  gx.setTransform(DPR,0,0,DPR,0,0);
+  gx.font=Math.floor(chh*0.92)+'px "IBM Plex Mono",monospace';
+  gx.textBaseline="middle";gx.textAlign="center";
+  tint.width=glyph.width;tint.height=glyph.height;
+}
+window.addEventListener("resize",resize);
+resize();
+
+/* ---------- SDF skull ---------- */
+function smin(a,b,k){const h=clamp(0.5+0.5*(b-a)/k,0,1);return mix(b,a,h)-k*h*(1-h);}
+function ssub(d1,d2,k){const h=clamp(0.5-0.5*(d2+d1)/k,0,1);return mix(d2,-d1,h)+k*h*(1-h);} // subtract d1 from d2
+function ell(x,y,z,rx,ry,rz){
+  const k0=Math.hypot(x/rx,y/ry,z/rz);
+  const k1=Math.hypot(x/(rx*rx),y/(ry*ry),z/(rz*rz));
+  return k1===0?-1:k0*(k0-1)/k1;
+}
+function sph(x,y,z,r){return Math.hypot(x,y,z)-r;}
+function cap(x,y,z,ax,ay,az,bx,by,bz,r){
+  const pax=x-ax,pay=y-ay,paz=z-az,bax=bx-ax,bay=by-ay,baz=bz-az;
+  let h=(pax*bax+pay*bay+paz*baz)/(bax*bax+bay*bay+baz*baz);h=clamp(h,0,1);
+  return Math.hypot(pax-bax*h,pay-bay*h,paz-baz*h)-r;
+}
+
+let rotY=0,rotX=0.06;
+function map(px,py,pz){
+  const cy=Math.cos(rotY),sy=Math.sin(rotY);
+  let x= px*cy - pz*sy;
+  let z= px*sy + pz*cy;
+  let y= py;
+  const cxr=Math.cos(rotX),sxr=Math.sin(rotX);
+  const y2=y*cxr - z*sxr, z2=y*sxr + z*cxr; y=y2; z=z2;
+
+  let d=ell(x,y-0.26,z+0.12, 0.66,0.66,0.70);                    // cranium
+  d=smin(d,ell(x,y+0.04,z-0.26, 0.38,0.22,0.26),0.08);           // upper face
+  d=smin(d,ell(x,y-0.05,z-0.38, 0.40,0.10,0.20),0.05);           // brow ridge
+  d=smin(d,ell(Math.abs(x)-0.33,y+0.16,z-0.30, 0.16,0.18,0.22),0.08); // cheekbones
+  d=smin(d,ell(x,y+0.38,z-0.14, 0.36,0.30,0.34),0.10);           // muzzle
+  d=smin(d,ell(x,y+0.68,z-0.04, 0.28,0.24,0.28),0.12);           // jaw
+  d=smin(d,sph(x,y+0.76,z-0.22,0.11),0.08);                      // chin
+  // temples flatten the sides
+  const temp=sph(Math.abs(x)-0.76,y-0.18,z+0.02,0.24);
+  d=ssub(temp,d,0.06);
+  // eye sockets
+  const eyes=sph(Math.abs(x)-0.21,y+0.02,z-0.40,0.17);
+  d=ssub(eyes,d,0.04);
+  // nasal cavity
+  const nose=cap(x,y,z, 0,-0.16,-0.46, 0,-0.34,-0.40, 0.08);
+  d=ssub(nose,d,0.035);
+  // mouth split
+  const mouth=ell(x,y+0.50,z-0.30, 0.22,0.035,0.22);
+  d=ssub(mouth,d,0.02);
+  // teeth ridges (front band)
+  if(z>0.05&&y<-0.34&&y>-0.62){
+    d+=0.012*Math.sin(x*46)*Math.sin(y*34);
+  }
+  return d;
+}
+function normal(px,py,pz){
+  const e=0.0035;
+  const d1=map(px+e,py,pz),d2=map(px-e,py,pz);
+  const d3=map(px,py+e,pz),d4=map(px,py-e,pz);
+  const d5=map(px,py,pz+e),d6=map(px,py,pz-e);
+  let nx=d1-d2,ny=d3-d4,nz=d5-d6;
+  const l=Math.hypot(nx,ny,nz)||1;
+  return [nx/l,ny/l,nz/l];
+}
+
+/* ---------- ASCII rendering ---------- */
+const RAMP=" \u00B7.:;~=+*x%#@$";
+const RL=RAMP.length;
+const SCRAM="01<>/\\|=+-*#%$&?!";
+let lightA=0;
+const colBuf=new Array(MAXC);       // per-row strings rebuilt each frame
+let lumaBuf=new Float32Array(MAXC*MAXR);
+
+function renderSkull(t,glitchPow){
+  lightA=t*0.22;
+  const lx=Math.sin(lightA)*0.8,ly=0.9,lz=0.65;
+  const ll=Math.hypot(lx,ly,lz);
+  const L=[lx/ll,ly/ll,lz/ll];
+  const fov=0.72;
+  const aspect=region.w/region.h;
+
+  for(let j=0;j<rows;j++){
+    const v=-(2*(j+0.5)/rows-1)*fov;
+    for(let i=0;i<cols;i++){
+      const u=(2*(i+0.5)/cols-1)*fov*aspect;
+      // ray dir
+      let dx=u,dy=v,dz=-1.55;
+      const dl=1/Math.hypot(dx,dy,dz);dx*=dl;dy*=dl;dz*=dl;
+      let ox=0,oy=-0.12,oz=2.35;
+      let tt=0,hit=false,d=0;
+      for(let s=0;s<48;s++){
+        d=map(ox+dx*tt,oy+dy*tt,oz+dz*tt);
+        if(d<0.0025){hit=true;break;}
+        tt+=d;
+        if(tt>4.2)break;
+      }
+      let luma=0;
+      if(hit){
+        const hx=ox+dx*tt,hy=oy+dy*tt,hz=oz+dz*tt;
+        const n=normal(hx,hy,hz);
+        const diff=clamp(n[0]*L[0]+n[1]*L[1]+n[2]*L[2],0,1);
+        const rim=Math.pow(1-Math.abs(n[0]*dx+n[1]*dy+n[2]*dz),2.2);
+        luma=clamp(diff*0.95+rim*0.45+clamp(-n[2],0,1)*0.22+0.05,0,1);
+        // depth dim
+        luma*=clamp(1-(tt-2.0)*0.30,0.32,1);
+      }
+      lumaBuf[j*cols+i]=luma;
+    }
+  }
+
+  // paint glyph layer
+  gx.clearRect(0,0,region.w,region.h);
+  const scrambleP=glitchPow>0?0.28*glitchPow:0;
+  const flickP=0.018;
+  for(let j=0;j<rows;j++){
+    for(let i=0;i<cols;i++){
+      let l=lumaBuf[j*cols+i];
+      if(l<0.045)continue;
+      let ch;
+      if(Math.random()<scrambleP){
+        ch=SCRAM[(Math.random()*SCRAM.length)|0];
+        l=clamp(l+ (Math.random()-0.3)*0.5,0.1,1);
+      }else{
+        ch=RAMP[clamp((l*RL)|0,0,RL-1)];
+        if(Math.random()<flickP&&l>0.2)ch=SCRAM[(Math.random()*SCRAM.length)|0];
+      }
+      const a=clamp(0.25+l*0.85,0,1);
+      gx.fillStyle=`rgba(${PINK[0]},${PINK[1]},${PINK[2]},${a})`;
+      gx.fillText(ch, (i+0.5)*cw, (j+0.5)*chh);
+    }
+  }
+}
+
+/* ---------- composite: chroma + glitch slices + scanlines ---------- */
+let scanPat=null;
+function makeScanlines(){
+  const p=document.createElement("canvas");p.width=2;p.height=3;
+  const c=p.getContext("2d");
+  c.fillStyle="rgba(0,0,0,0.22)";c.fillRect(0,2,2,1);
+  scanPat=cx.createPattern(p,"repeat");
+}
+makeScanlines();
+
+function tintCopy(color,dx,dy,alpha){
+  tx.setTransform(1,0,0,1,0,0);
+  tx.clearRect(0,0,tint.width,tint.height);
+  tx.drawImage(glyph,0,0);
+  tx.globalCompositeOperation="source-atop";
+  tx.fillStyle=color;tx.fillRect(0,0,tint.width,tint.height);
+  tx.globalCompositeOperation="source-over";
+  cx.globalCompositeOperation="lighter";
+  cx.globalAlpha=alpha;
+  cx.drawImage(tint,region.x+dx,region.y+dy,region.w,region.h);
+  cx.globalAlpha=1;
+  cx.globalCompositeOperation="source-over";
+}
+
+let slices=[];
+function buildSlices(pow){
+  slices=[];
+  const n=8+((Math.random()*10)|0);
+  for(let s=0;s<n;s++){
+    const y0=Math.random()*H, h=(Math.random()*Math.random())*H*0.22+6;
+    slices.push({y:y0,h,dx:(Math.random()-0.5)*pow*90});
+  }
+}
+
+function composite(glitchPow){
+  cx.fillStyle="#070708";
+  cx.fillRect(0,0,W,H);
+
+  if(glitchPow>0.01){
+    // slice-displaced copy of whole previous frame region
+    cx.save();
+    cx.drawImage(glyph,region.x,region.y,region.w,region.h);
+    cx.restore();
+    for(const s of slices){
+      cx.drawImage(glyph,
+        0,(s.y-region.y)*DPR,glyph.width,s.h*DPR,
+        region.x+s.dx,s.y,region.w,s.h);
+    }
+  }else{
+    cx.drawImage(glyph,region.x,region.y,region.w,region.h);
+  }
+  const ab=2+glitchPow*6;
+  tintCopy("rgb(46,110,255)", ab,0, 0.38+glitchPow*0.22);
+  tintCopy("rgb(255,70,190)", -ab,0, 0.36+glitchPow*0.22);
+
+  cx.fillStyle=scanPat;
+  cx.fillRect(0,0,W,H);
+
+  if(glitchPow>0.25){
+    cx.fillStyle=`rgba(255,47,146,${0.05*glitchPow})`;
+    cx.fillRect(0,0,W,H);
+  }
+}
+
+/* ---------- glitch scheduler ---------- */
+let glitchUntil=0,nextGlitch=performance.now()+3800,glitchDur=0;
+let glitchPow=0;
+function updateGlitch(now){
+  if(forceGlitch){glitchPow=0.85;if(Math.random()<0.5)buildSlices(0.85);return;}
+  if(now>=nextGlitch){
+    glitchDur=320+Math.random()*520;
+    glitchUntil=now+glitchDur;
+    nextGlitch=now+glitchDur+5200+Math.random()*6200;
+    buildSlices(1);
+    audio.glitch();
+  }
+  if(now<glitchUntil){
+    const k=1-(glitchUntil-now)/glitchDur;
+    glitchPow=(k<0.18?k/0.18:1-(k-0.18)/0.82);
+    if(Math.random()<0.3)buildSlices(glitchPow);
+  }else glitchPow=0;
+}
+
+/* ---------- typewriter ---------- */
+const PHRASES=[
+  "THE OLD WORLD IS DYING",
+  "AND THE NEW WORLD STRUGGLES TO BE BORN",
+  "NOW IS THE TIME OF MONSTERS"
+];
+const phEl=document.getElementById("phrase-txt");
+let phIdx=0,phPos=0,phState="type",phNext=0;
+function phraseTick(now){
+  if(now<phNext)return;
+  const cur=PHRASES[phIdx];
+  if(phState==="type"){
+    phPos++;
+    phEl.textContent=cur.slice(0,phPos);
+    phNext=now+42+Math.random()*66;
+    if(phPos>=cur.length){phState="hold";phNext=now+2900;}
+  }else if(phState==="hold"){
+    phState="erase";phNext=now;
+  }else{
+    // glitch-erase
+    phPos=Math.max(0,phPos-1-(Math.random()<0.4?1:0));
+    let s=cur.slice(0,phPos);
+    if(phPos>0&&Math.random()<0.35){
+      s=s.slice(0,-1)+SCRAM[(Math.random()*SCRAM.length)|0];
+    }
+    phEl.textContent=s;
+    phNext=now+26;
+    if(phPos<=0){phIdx=(phIdx+1)%PHRASES.length;phState="type";phNext=now+500;}
+  }
+}
+
+/* ---------- log feed ---------- */
+const LOGFRAG=[
+  "return data * avail.map()",
+  "matrix token += Math.floor(Math.random() * 888);",
+  "if (user_status != 0x0) {",
+  "payload = load(id) * Math.floor(Math.random() * 888);",
+  "console.log('[SYSTEM]: status', matrix.status);",
+  "response id = Math.floor(Math.random() * 888);",
+  "return data.fetch(item) // 118k rows",
+  "if (config.value >= 100) {",
+  "socket.purge(); // marrow checksum OK",
+  "cranial map rebuilt :: 56 x 60 cells",
+  "signal.lock(0x2F92) - transfiguration queued",
+  "epoch delta accepted; reverting tissue layers",
+  "the skull remembers every version of itself",
+  "render pass complete - chroma drift nominal"
+];
+const logbox=document.getElementById("logbox");
+let logNext=0,logCount=0;
+function logTick(now){
+  if(now<logNext)return;
+  logNext=now+340+Math.random()*560;
+  const d=document.createElement("div");
+  const t=new Date();
+  const stamp=String(t.getMinutes()).padStart(2,"0")+":"+String(t.getSeconds()).padStart(2,"0");
+  const sys=Math.random()<0.3;
+  d.textContent=(sys?"["+stamp+"] ":"    ")+LOGFRAG[(Math.random()*LOGFRAG.length)|0];
+  logbox.appendChild(d);
+  logCount++;
+  while(logbox.children.length>9)logbox.removeChild(logbox.firstChild);
+}
+
+/* ---------- clock ---------- */
+const clockEl=document.getElementById("clock");
+function clockTick(){
+  const t=new Date();
+  clockEl.textContent=String(t.getHours()).padStart(2,"0")+" "+
+    String(t.getMinutes()).padStart(2,"0")+" "+
+    String(t.getSeconds()).padStart(2,"0");
+}
+setInterval(clockTick,1000);clockTick();
+
+/* ---------- audio (optional, off by default) ---------- */
+const audio=(()=>{
+  let ctx=null,master=null,on=false;
+  function ensure(){
+    if(ctx)return;
+    ctx=new (window.AudioContext||window.webkitAudioContext)();
+    master=ctx.createGain();master.gain.value=0;master.connect(ctx.destination);
+    const g=ctx.createGain();g.gain.value=0.05;
+    const f=ctx.createBiquadFilter();f.type="lowpass";f.frequency.value=240;
+    const o1=ctx.createOscillator();o1.type="sine";o1.frequency.value=55;
+    const o2=ctx.createOscillator();o2.type="sine";o2.frequency.value=55.6;
+    o1.connect(f);o2.connect(f);f.connect(g);g.connect(master);
+    o1.start();o2.start();
+  }
+  return{
+    toggle(){
+      ensure();
+      if(ctx.state==="suspended")ctx.resume();
+      on=!on;
+      master.gain.linearRampToValueAtTime(on?1:0,ctx.currentTime+0.4);
+      return on;
+    },
+    glitch(){
+      if(!on||!ctx)return;
+      const len=ctx.sampleRate*0.18;
+      const buf=ctx.createBuffer(1,len,ctx.sampleRate);
+      const d=buf.getChannelData(0);
+      for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*(1-i/len);
+      const s=ctx.createBufferSource();s.buffer=buf;
+      const bp=ctx.createBiquadFilter();bp.type="bandpass";bp.frequency.value=900+Math.random()*2200;bp.Q.value=2;
+      const g=ctx.createGain();g.gain.value=0.16;
+      s.connect(bp);bp.connect(g);g.connect(master);
+      s.start();
+    }
+  };
+})();
+const soundBtn=document.getElementById("sound");
+soundBtn.addEventListener("click",e=>{
+  e.stopPropagation();
+  const on=audio.toggle();
+  soundBtn.textContent=on?"SOUND ON":"SOUND OFF";
+});
+
+/* ---------- input ---------- */
+const hp=new URLSearchParams(location.hash.slice(1));
+let autoSpin=!hp.has("rot");
+const forceGlitch=hp.has("glitch");
+let dragTgtY=parseFloat(hp.get("rot")||"0"),dragTgtX=0.06,dragging=false,lx=0,ly=0,downAt=0,moved=0;
+function ptr(x,y){return[x/W-0.5,y/H-0.5];}
+window.addEventListener("pointerdown",e=>{
+  if(e.target===soundBtn)return;
+  dragging=true;lx=e.clientX;ly=e.clientY;downAt=performance.now();moved=0;
+});
+window.addEventListener("pointermove",e=>{
+  if(!dragging)return;
+  const dx=e.clientX-lx,dy=e.clientY-ly;
+  moved+=Math.abs(dx)+Math.abs(dy);
+  dragTgtY+=dx*0.008;
+  dragTgtX=clamp(dragTgtX+dy*0.006,-0.9,0.9);
+  lx=e.clientX;ly=e.clientY;
+});
+window.addEventListener("pointerup",e=>{
+  dragging=false;
+  if(performance.now()-downAt<350&&moved<14&&e.target!==soundBtn){
+    nextGlitch=performance.now(); // transfigure now
+  }
+});
+window.addEventListener("keydown",e=>{
+  if(e.code==="Space"){e.preventDefault();nextGlitch=performance.now();}
+});
+
+/* ---------- main loop ---------- */
+let lastRender=0;
+const reduced=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function frame(now){
+  requestAnimationFrame(frame);
+  if(reduced&&now-lastRender<100)return;
+  if(now-lastRender<1000/26)return;
+  const dt=Math.min((now-lastRender)/1000,0.1);
+  lastRender=now;
+
+  rotY+= (dragTgtY - rotY)*0.08;
+  rotX+= (dragTgtX - rotX)*0.08;
+  if(!dragging&&autoSpin)dragTgtY+=dt*0.11;
+
+  updateGlitch(now);
+  renderSkull(now/1000,glitchPow);
+  composite(glitchPow);
+  phraseTick(now);
+  logTick(now);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
+
