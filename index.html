@@ -36,7 +36,7 @@
     font:inherit;letter-spacing:.18em;padding:4px 10px;margin-top:6px;cursor:pointer;text-transform:uppercase}
   #sound:hover{color:var(--pink);border-color:var(--pink-dim)}
   #phrase{
-    position:fixed;left:0;right:0;top:71%;z-index:5;text-align:center;pointer-events:none;
+    position:fixed;left:0;right:0;top:auto;bottom:calc(52px + (9 * 1.65 * 9.5px) + 20px + 16px);z-index:5;text-align:center;pointer-events:none;
     font-size:clamp(13px,1.7vw,19px);font-weight:600;letter-spacing:.42em;text-indent:.42em;
     text-shadow:0 0 18px rgba(255,47,146,.45);
     min-height:1.4em;padding:0 20px;
@@ -55,7 +55,7 @@
     background:radial-gradient(ellipse at 50% 42%,transparent 55%,rgba(0,0,0,.55) 100%)}
   @media (max-width:640px){
     #logbox{width:92vw;bottom:46px;font-size:8.5px}
-    #phrase{top:66%;letter-spacing:.3em;text-indent:.3em}
+    #phrase{bottom:calc(46px + (9 * 1.65 * 8.5px) + 20px + 12px);letter-spacing:.3em;text-indent:.3em}
     #title-bl{bottom:12px}#ctl-br{bottom:12px}
   }
 </style>
@@ -494,4 +494,3 @@ requestAnimationFrame(frame);
 </script>
 </body>
 </html>
-
